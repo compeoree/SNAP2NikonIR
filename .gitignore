@@ -1,0 +1,16 @@
+*.cmf
+*.elf
+*.hxl
+*.lst
+*.map
+*.mum
+*.o
+*.rlf
+*.sdb
+*.sym
+*.d
+*.i
+*.p1
+private/
+Makefile-*
+debug/

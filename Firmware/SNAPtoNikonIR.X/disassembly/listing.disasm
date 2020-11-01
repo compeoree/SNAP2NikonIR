@@ -1,0 +1,481 @@
+Disassembly Listing for SNAPtoNikonIR
+Generated From:
+C:/Users/compe/MPLABXProjects/SNAPtoNikonIR.X/dist/default/debug/SNAPtoNikonIR.X.debug.elf
+Nov 1, 2020 9:06:17 AM
+
+---  C:/Users/compe/MPLABXProjects/SNAPtoNikonIR.X/main.c  ----------------------------------------------
+1:             /*
+2:              * File:   main.c
+3:              * Author: Louis McCarthy
+4:              *
+5:              * Created on October 7, 2020
+6:              * Version 1.0
+7:              * 
+8:              * Compiler: XC8 (v2.30)
+9:              * C Flavor: C99
+10:             * MCU: PIC16F18313
+11:             *                ______
+12:             *   VCC (3.0V) -|*     |- VSS
+13:             *   IR LED (+) -|A5  A0|- ICSPDATA
+14:             *   IR LED (-) -|A4  A1|- ICSPCLK
+15:             *         MCLR -|____A2|- Trigger
+16:             *
+17:             * *** Bill of Materials (BOM) ***
+18:             *   1) PIC16F18313 (MCU)
+19:             *   2) LTE-3371TL  (IR LED)
+20:             *   3) SMTM1632    (1632 battery holder)
+21:             *   4) B3F-1000    (momentary switch)
+22:             *   5) 100R 0603   (100 ohm SMD resistor)
+23:             *   6) 1x5 Header  (programming header 2.54mm pitch)
+24:             *   7) SJ1-2533    (2.5mm headphone jack)
+25:             * 
+26:             * *** Nikon IR Spec ***
+27:             * Carrier Frequency
+28:             * 38.4 kHz = 0.0000260417 seconds (.0260417 ms or 26.0417 us)
+29:             * 26 us = ~38462 Hz
+30:             *     ______                   ____        ____          ____
+31:             *    | 2000 |        28       |400 | 1580 |400 |  3580  |400 |  63.2
+32:             *    |  us  |        ms       | us |  us  | us |   us   | us |   ms
+33:             * ___|      |_________________|    |______|    |________|    |___________ x2
+34:             *       77          1077        15    61    15    138     15    2431
+35:             *          26 us ticks
+36:             * Source: https://www.sbprojects.net/projects/nikon/   
+37:             *         http://www.bigmike.it/ircontrol/
+38:             *         http://allynh.com/blog/making-an-ir-remote-control-for-a-nikon-camera/
+39:             *         https://www.christidis.info/index.php/personal-projects/arduino-nikon-infrared-command-code
+40:             * 
+41:             * *** SNAP Spec ***
+42:             *       _____
+43:             *   ___/     |_________     C = Common          (sleeve, "GND")
+44:             *   ___      |____|__|_>    F = Focus           (ring, switch closure to common)
+45:             *      \_____| C   F  S     S = Shutter release (tip, switch closure to common)
+46:             * Source: https://www.doc-diy.net/photo/remote_pinout/canon_pinout.png
+47:             * 
+48:             * 
+49:             * NCO module has too much error for large frequency mismatch between Fosc and Foverflow
+50:             * At slowest Fosc of 1MHz, output is 38.147kHz or 38.624kHz, depending on incr.
+51:             * 
+52:             * The PWM module outputs 38.461kHz at 2MHz Fosc
+53:             */
+54:            #pragma warning disable 1395  // Disable notable code message - for xc8 developers
+55:            
+56:            #include <xc.h>
+57:            #include <stdbool.h>
+58:            
+59:            // <editor-fold defaultstate="collapsed" desc="Configuration Parameters">
+60:            // Config 1
+61:            #pragma config FEXTOSC  = OFF       // External OSC disabled
+62:            #pragma config RSTOSC   = HFINT1    // HFINTOSC at 1MHz
+63:            #pragma config CLKOUTEN = OFF       // Clock out disabled
+64:            #pragma config CSWEN    = ON        // Software clock switching enabled
+65:            #pragma config FCMEN    = OFF       // Fail-Safe monitor disabled
+66:            
+67:            // Config 2
+68:            #pragma config MCLRE    = ON        // MCLR is reset/pgm pin
+69:            #pragma config PWRTE    = OFF       // Power-up timer disabled
+70:            #pragma config WDTE     = OFF       // WDT disabled
+71:            #pragma config LPBOREN  = OFF       // ULPBOR disabled
+72:            #pragma config BOREN    = OFF       // BOR disabled
+73:            #pragma config BORV     = LOW       // BOR at 2.45V
+74:            #pragma config PPS1WAY  = ON        // PPS single set only
+75:            #pragma config STVREN   = ON        // Stack overflow/underflow reset enabled
+76:            #pragma config DEBUG    = OFF       // Automatically changed by ICSP - don't set on here
+77:            
+78:            // Config 3
+79:            #pragma config WRT      = ALL       // Write protection on
+80:            #pragma config LVP      = OFF       // LVPGM disabled, standard mode
+81:            
+82:            // Config 4
+83:            #pragma config CP       = OFF       // Code protect off
+84:            #pragma config CPD      = OFF       // Data EEPROM protect off
+85:            // </editor-fold>
+86:            
+87:            // <editor-fold defaultstate="collapsed" desc="Variables & Constants">
+88:            #define _XTAL_FREQ  2000000
+89:            #define IR_PLUS     LATAbits.LATA5  // RA5/Pin 2
+90:            #define BYTE        uint8_t         // Convenience type
+91:            
+92:            volatile bool signalCamera = false;
+93:            // </editor-fold>
+94:            
+95:            void main(void) {
+96:                // <editor-fold defaultstate="collapsed" desc="Initialize">
+97:                // Set the PIC to a known configuration
+98:                
+99:                // Set Fosc
+100:               OSCCON1 = 0b01100010;   // Internal 1Mhz clock, clock div. 4
+0029  3062     MOVLW 0x62
+002A  0032     MOVLB 0x12
+002B  0099     MOVWF OSCCON1
+101:               OSCCON3 = 0b00000000;   // SO uses pins, low power mode, auto clock switch
+002C  019B     CLRF OSCCON3
+102:               OSCEN = 0b00000000;     // ADC osc off, SO off, LFINT off, HFINT on, EXTOSC off
+002D  019D     CLRF OSCEN
+103:               OSCFRQ = 0b00000100;    // Nominal freq 8MHz
+002E  3004     MOVLW 0x4
+002F  009F     MOVWF OSCFRQ
+104:               //OSCFRQ = 0b00000011;    // Nominal freq 4MHz
+105:               //OSCFRQ = 0b00000001;    // Nominal freq 2MHz
+106:               //OSCFRQ = 0b00000000;    // Nominal freq 1MHz
+107:           
+108:               // Clear all ISR flags
+109:               PIR0 = 0x00;
+0030  0020     MOVLB 0x0
+0031  0190     CLRF PIR0
+110:               PIR1 = 0x00;
+0032  0191     CLRF PIR1
+111:               PIR2 = 0x00;
+0033  0192     CLRF PIR2
+112:               PIR3 = 0x00;
+0034  0193     CLRF PIR3
+113:               PIR4 = 0x00;
+0035  0194     CLRF PIR4
+114:               
+115:               // Disable all ISRs
+116:               PIE0 = 0x00;    // Ext INT, TMR0
+0036  0021     MOVLB 0x1
+0037  0190     CLRF PIE0
+117:               PIE1 = 0x00;    // TMR1, TMR2, UART, ADC
+0038  0191     CLRF PIE1
+118:               PIE2 = 0x00;    // NCO, NVM, compare
+0039  0192     CLRF PIE2
+119:               PIE3 = 0x00;    // clock interrupts
+003A  0193     CLRF PIE3
+120:               PIE4 = 0x00;    // CCP/CWG
+003B  0194     CLRF PIE4
+121:               INTCON = 0x00;  // Disable peripheral and global, Ext INT on falling edge
+003C  018B     CLRF INTCON
+122:               
+123:               // Fixed Voltage Regulator - disabled
+124:               FVRCON = 0b00000000;
+003D  0022     MOVLB 0x2
+003E  0197     CLRF FVRCON
+125:               
+126:               // Analog to Digital Converter - disabled
+127:               ADCON0 = 0b11110100;    // Disabled but pointing to temperature indicator
+003F  30F4     MOVLW 0xF4
+0040  0021     MOVLB 0x1
+0041  009D     MOVWF ADCON0
+128:               ADCON1 = 0b11100011;    // Vref+ to FVR, Vref- to Vss, Fosc/64, right justified
+0042  30E3     MOVLW 0xE3
+0043  009E     MOVWF ADCON1
+129:               ADACT = 0b00000000;     // No auto-conversion trigger
+0044  019F     CLRF ADACT
+130:               ANSELA = 0x00;          // All pins as digital I/O
+0045  0023     MOVLB 0x3
+0046  018C     CLRF ANSELA
+131:               
+132:               // Digital to Analog Converter - disabled
+133:               DACCON0 = 0b00001000;   // DAC uses Vss & FVR, not connected to pin, disabled
+0047  3008     MOVLW 0x8
+0048  0022     MOVLB 0x2
+0049  0098     MOVWF DACCON0
+134:               DACCON1 = 0b00000000;   // DAC voltage is lowest
+004A  0199     CLRF DACCON1
+135:               
+136:               // UART - disabled
+137:               TX1STA = 0b00000100;    // High BAUD, no synch break, async mode, no TX, 8bit
+004B  3004     MOVLW 0x4
+004C  0023     MOVLB 0x3
+004D  009E     MOVWF TX1STA
+138:               RC1STA = 0b00000000;    // no addr bit, no cont. RX, 8bit, serial port disabled
+004E  019D     CLRF RC1STA
+139:               BAUD1CON = 0b00001000;  // no auto baud, no wakeup, 16bit baud, std idle 
+004F  3008     MOVLW 0x8
+0050  009F     MOVWF BAUD1CON
+140:               SP1BRGL = 12;           // 12=19.2k, 25=9600 for 1MHz Fosc
+0051  300C     MOVLW 0xC
+0052  009B     MOVWF SP1BRG
+141:               SP1BRGH = 0x00;         // upper word of SPBRG
+0053  019C     CLRF SP1BRGH
+142:               
+143:               // Set pin directions and modes
+144:               TRISA = 0b00000100;     // RA2 is input  
+0054  3004     MOVLW 0x4
+0055  0021     MOVLB 0x1
+0056  008C     MOVWF TRISA
+145:               LATA =  0b00000000;     // Set all outputs low
+0057  0022     MOVLB 0x2
+0058  018C     CLRF LATA
+146:               WPUA = 0b00001100;      // RA2 has weak pullup (MCLR too)
+0059  300C     MOVLW 0xC
+005A  0024     MOVLB 0x4
+005B  008C     MOVWF WPUA
+147:               ODCONA = 0b00010000;    // RA4 is open-drain (sink only)
+005C  3010     MOVLW 0x10
+005D  0025     MOVLB 0x5
+005E  008C     MOVWF ODCONA
+148:               SLRCONA = 0b00000000;   // No slew rate control (not default)
+005F  0026     MOVLB 0x6
+0060  018C     CLRF SLRCONA
+149:               INLVLA = 0b00111111;    // ST input levels (not TTL)
+0061  303F     MOVLW 0x3F
+0062  0027     MOVLB 0x7
+0063  008C     MOVWF INLVLA
+150:               RA0PPS = 0x00;          // DIO on A0
+0064  003D     MOVLB 0x1D
+0065  0190     CLRF RA0PPS
+151:               RA1PPS = 0x00;          // DIO on A1
+0066  0191     CLRF RA1PPS
+152:               RA2PPS = 0x00;          // DIO on A2
+0067  0192     CLRF RA2PPS
+153:               RA4PPS = 0b00000010;    // PWM5 on A4
+0068  3002     MOVLW 0x2
+0069  0094     MOVWF RA4PPS
+154:               RA5PPS = 0x00;          // DIO on A5
+006A  0195     CLRF RA5PPS
+155:               INTPPS = 0b00000010;    // INT on A2
+006B  3002     MOVLW 0x2
+006C  003C     MOVLB 0x1C
+006D  0090     MOVWF INTPPS
+156:               
+157:               // Timer 0 - disabled (see page 257)
+158:               T0CON0 = 0b00000000;    // 1:1 postscaler, 8-bit mode, disabled
+006E  0020     MOVLB 0x0
+006F  0197     CLRF T0CON0
+159:               T0CON1 = 0b01000000;    // 1:1 prescaler, sync to Fosc/4, source Fosc/4
+0070  3040     MOVLW 0x40
+0071  0098     MOVWF T0CON1
+160:               TMR0H = 12;             // 24us @ 2MHz Fosc
+0072  300C     MOVLW 0xC
+0073  0096     MOVWF TMR0H
+161:               TMR0L = 0;              // Reset 8-bit timer
+0074  0195     CLRF TMR0L
+162:               
+163:               // Timer 2 - PWM mode (see page 174)
+164:               PR2 = 12;               //(PWMxDC = 26, PR2=12) = 38461 Hz
+0075  300C     MOVLW 0xC
+0076  009E     MOVWF PR2
+165:               PWM5DCL = (BYTE)(26 << 6); // Lowest 2 bits
+0077  3080     MOVLW 0x80
+0078  002C     MOVLB 0xC
+0079  0097     MOVWF PWM5DCL
+166:               PWM5DCH = 26 >> 2;      // Highest 8 bits
+007A  3006     MOVLW 0x6
+007B  0098     MOVWF PWM5DCH
+167:               PWM5CON = 0b10000000;   // Enable PWM5, active high
+007C  3080     MOVLW 0x80
+007D  0099     MOVWF PWM5CON
+168:               PIR1bits.TMR2IF = 0;    // Clear ISR flag
+007E  0020     MOVLB 0x0
+007F  1091     BCF PIR1, 0x1
+169:               T2CON = 0b00000100;     // 1:1 postscaler, enabled, 1:1 prescaler
+0080  3004     MOVLW 0x4
+0081  009F     MOVWF T2CON
+170:               TMR2 = 0x00;            // Reset counter
+0082  019D     CLRF TMR2
+171:               
+172:               // Power down unused peripherals
+173:               PMD0 = 0b01000111;      // Disable IOC, CLK, NVM, FVR modules
+0083  3047     MOVLW 0x47
+0084  0032     MOVLB 0x12
+0085  0091     MOVWF PMD0
+174:               PMD1 = 0b10000011;      // Enable TMR2, disable TMR1, TMR0, NCO modules
+0086  3083     MOVLW 0x83
+0087  0092     MOVWF PMD1
+175:               PMD2 = 0b01100110;      // Disable CMP, ADC, DAC modules
+0088  3066     MOVLW 0x66
+0089  0093     MOVWF PMD2
+176:               PMD3 = 0b01100011;      // PWM5 enabled, disable CCP, PWM6, CWG modules
+008A  3063     MOVLW 0x63
+008B  0094     MOVWF PMD3
+177:               PMD4 = 0b00100010;      // Disable MSSP, UART modules
+008C  3022     MOVLW 0x22
+008D  0095     MOVWF PMD4
+178:               PMD5 = 0b00000111;      // Disable DSM, CLC modules
+008E  3007     MOVLW 0x7
+008F  0096     MOVWF PMD5
+179:               CPUDOZE = 0b00000000;   // Full sleep, no doze
+0090  0198     CLRF CPUDOZE
+180:               
+181:               // Enable interrupts
+182:               PIE0 = 0b00000001;      // Enable external interrupt (A2)
+0091  3001     MOVLW 0x1
+0092  0021     MOVLB 0x1
+0093  0090     MOVWF PIE0
+183:               PIE1 = 0b00000000;      // Disable TMR2 interrupt
+0094  0191     CLRF PIE1
+184:               //PIE1 = 0b00000010;      // Enable TMR2 interrupt
+185:               INTCONbits.PEIE = 1;    // Enable peripheral interrupts
+0095  170B     BSF INTCON, 0x6
+186:               INTCONbits.GIE = 1;     // Enable interrupts
+0096  178B     BSF INTCON, 0x7
+187:               //  </editor-fold>
+188:               
+189:               while (1)
+190:               {
+191:                   SLEEP();
+0097  0063     SLEEP
+192:                   if (!signalCamera)
+0098  0873     MOVF 0xF3, W
+0099  1D03     BTFSS STATUS, 0x2
+009A  289C     GOTO 0x9C
+009B  289D     GOTO 0x9D
+009C  289E     GOTO 0x9E
+009D  2897     GOTO 0x97
+193:                       continue;
+194:                   
+195:                   signalCamera = false;
+009E  01F3     CLRF 0xF3
+196:                   for (BYTE i=0;i<2;i++)
+009F  01F2     CLRF 0xF2
+197:                   {
+198:                       IR_PLUS = 1;
+00A0  0022     MOVLB 0x2
+00A1  168C     BSF LATA, 0x5
+199:                       __delay_us(2000);
+00A2  30C8     MOVLW 0xC8
+00A3  3200     BRA 0xA4
+00A4  0B89     DECFSZ WREG, F
+00A5  28A3     GOTO 0xA3
+200:                       IR_PLUS = 0;
+00A6  0022     MOVLB 0x2
+00A7  128C     BCF LATA, 0x5
+201:                       __delay_ms(28);
+00A8  3013     MOVLW 0x13
+00A9  00F1     MOVWF 0x171
+00AA  302D     MOVLW 0x2D
+00AB  0B89     DECFSZ WREG, F
+00AC  28AB     GOTO 0xAB
+00AD  0BF1     DECFSZ 0x171, F
+00AE  28AB     GOTO 0xAB
+00AF  0000     NOP
+202:                       IR_PLUS = 1;
+00B0  0022     MOVLB 0x2
+00B1  168C     BSF LATA, 0x5
+203:                       __delay_us(400);
+00B2  3042     MOVLW 0x42
+00B3  0B89     DECFSZ WREG, F
+00B4  28B3     GOTO 0xB3
+00B5  3200     BRA 0xB6
+204:                       IR_PLUS = 0;
+00B6  0022     MOVLB 0x2
+00B7  128C     BCF LATA, 0x5
+205:                       __delay_us(1580);
+00B8  309E     MOVLW 0x9E
+00B9  3200     BRA 0xBA
+00BA  0B89     DECFSZ WREG, F
+00BB  28B9     GOTO 0xB9
+206:                       IR_PLUS = 1;
+00BC  0022     MOVLB 0x2
+00BD  168C     BSF LATA, 0x5
+207:                       __delay_us(400);
+00BE  3042     MOVLW 0x42
+00BF  0B89     DECFSZ WREG, F
+00C0  28BF     GOTO 0xBF
+00C1  3200     BRA 0xC2
+208:                       IR_PLUS = 0;
+00C2  0022     MOVLB 0x2
+00C3  128C     BCF LATA, 0x5
+209:                       __delay_us(3580);
+00C4  30FF     MOVLW 0xFF
+00C5  3200     BRA 0xC6
+00C6  3200     BRA 0xC7
+00C7  0B89     DECFSZ WREG, F
+00C8  28C5     GOTO 0xC5
+00C9  3200     BRA 0xCA
+00CA  3200     BRA 0xCB
+00CB  0000     NOP
+210:                       IR_PLUS = 1;
+00CC  0022     MOVLB 0x2
+00CD  168C     BSF LATA, 0x5
+211:                       __delay_us(400);
+00CE  3042     MOVLW 0x42
+00CF  0B89     DECFSZ WREG, F
+00D0  28CF     GOTO 0xCF
+00D1  3200     BRA 0xD2
+212:                       IR_PLUS = 0;
+00D2  0022     MOVLB 0x2
+00D3  128C     BCF LATA, 0x5
+213:                       __delay_ms(63);
+00D4  3029     MOVLW 0x29
+00D5  00F1     MOVWF 0x171
+00D6  30E8     MOVLW 0xE8
+00D7  0B89     DECFSZ WREG, F
+00D8  28D7     GOTO 0xD7
+00D9  0BF1     DECFSZ 0x171, F
+00DA  28D7     GOTO 0xD7
+214:                       __delay_us(200);
+00DB  3021     MOVLW 0x21
+00DC  0B89     DECFSZ WREG, F
+00DD  28DC     GOTO 0xDC
+00DE  0000     NOP
+215:                   }
+00DF  3001     MOVLW 0x1
+00E0  00F1     MOVWF 0x171
+00E1  0871     MOVF 0x171, W
+00E2  07F2     ADDWF 0x172, F
+00E3  3002     MOVLW 0x2
+00E4  0272     SUBWF 0x172, W
+00E5  1C03     BTFSS STATUS, 0x0
+00E6  28E8     GOTO 0xE8
+00E7  28E9     GOTO 0xE9
+00E8  28A0     GOTO 0xA0
+00E9  2897     GOTO 0x97
+216:               }
+217:               return;
+218:           }
+219:           
+220:           void __interrupt() ISR(void)
+0004  147E     BSF 0x17E, 0x0
+0005  3180     MOVLP 0x0
+221:           {
+222:               if (PIR0bits.INTF && PIE0bits.INTE) // See page 88
+0006  0020     MOVLB 0x0
+0007  1C10     BTFSS PIR0, 0x0
+0008  280A     GOTO 0xA
+0009  280B     GOTO 0xB
+000A  2816     GOTO 0x16
+000B  0021     MOVLB 0x1
+000C  1C10     BTFSS PIE0, 0x0
+000D  280F     GOTO 0xF
+000E  2810     GOTO 0x10
+000F  2816     GOTO 0x16
+223:               {
+224:                   PIR0bits.INTF = 0;
+0010  0020     MOVLB 0x0
+0011  1010     BCF PIR0, 0x0
+225:                   signalCamera = true;
+0012  3001     MOVLW 0x1
+0013  00F0     MOVWF __pcstackCOMMON
+0014  0870     MOVF __pcstackCOMMON, W
+0015  00F3     MOVWF signalCamera
+226:               }
+227:               
+228:               if(PIR1bits.TMR2IF && PIE1bits.TMR2IE) // See page 174 for PWM
+0016  0020     MOVLB 0x0
+0017  1C91     BTFSS PIR1, 0x1
+0018  281A     GOTO 0x1A
+0019  281B     GOTO 0x1B
+001A  2822     GOTO 0x22
+001B  0021     MOVLB 0x1
+001C  1C91     BTFSS PIE1, 0x1
+001D  281F     GOTO 0x1F
+001E  2820     GOTO 0x20
+001F  2822     GOTO 0x22
+229:               {
+230:                  PIR1bits.TMR2IF = 0;
+0020  0020     MOVLB 0x0
+0021  1091     BCF PIR1, 0x1
+231:               }
+232:               
+233:               /*if(PIR0bits.TMR0IF && PIE0bits.TMR0IE)
+234:               {
+235:                  PIR0bits.TMR0IF = 0;
+236:                  TMR0L = 0;   // Reset for 8-bit mode
+237:                  counter++;
+238:               }*/
+239:           }
+0022  107E     BCF 0x7E, 0x0
+240:           
+241:           /* Todo 
+242:            * 
+243:            * Check DSM module operation
+244:            * 217uA (.22mA) idle power draw @ 3.227V, 100 mAh
+245:            */
+246:           
+---  C:/Users/compe/AppData/Local/Temp/shc4x.s  ---------------------------------------------------------
+0025  01F3     CLRF signalCamera
+0026  107E     BCF 0x7E, 0x0
+0027  0020     MOVLB 0x0
+0028  2829     GOTO 0x29

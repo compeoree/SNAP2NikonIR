@@ -14,3 +14,10 @@ https://oshpark.com/shared_projects/UpTNsuQq
 
 Fusion 360 CAD
 https://a360.co/35Rz2Ta
+
+Sources:
+https://www.sbprojects.net/projects/nikon/
+http://www.bigmike.it/ircontrol/
+http://allynh.com/blog/making-an-ir-remote-control-for-a-nikon-camera/
+https://www.christidis.info/index.php/personal-projects/arduino-nikon-infrared-command-code
+https://www.doc-diy.net/photo/remote_pinout/canon_pinout.png
